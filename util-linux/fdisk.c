@@ -21,8 +21,6 @@
 //config:	default y
 //config:	depends on FDISK
 //config:	depends on !LFS   # with LFS no special code is needed
-//config:	help
-//config:	  Enable this option to support large disks > 4GB.
 //config:
 //config:config FEATURE_FDISK_WRITABLE
 //config:	bool "Write support"
@@ -105,8 +103,8 @@
 //usage:	)
 //usage:     "\n	-b 2048		(for certain MO disks) use 2048-byte sectors"
 //usage:     "\n	-C CYLINDERS	Set number of cylinders/heads/sectors"
-//usage:     "\n	-H HEADS"
-//usage:     "\n	-S SECTORS"
+//usage:     "\n	-H HEADS	Typically 255"
+//usage:     "\n	-S SECTORS	Typically 63"
 
 #ifndef _LARGEFILE64_SOURCE
 /* For lseek64 */
@@ -719,42 +717,6 @@ typedef struct sun_partition sun_partition;
 #define sunlabel ((sun_partition *)MBRbuffer)
 STATIC_OSF void bsd_select(void);
 STATIC_OSF void xbsd_print_disklabel(int);
-
-/* Return partition name */
-static const char *
-partname(const char *dev, int pno, int lth)
-{
-        const char *p;
-        int w, wp;
-        int bufsiz;
-        char *bufp;
-
-        bufp = auto_string(xzalloc(80));
-        bufsiz = 80;
-
-        w = strlen(dev);
-        p = "";
-
-        if (isdigit(dev[w-1]))
-                p = "p";
-
-        /* devfs kludge - note: fdisk partition names are not supposed
-           to equal kernel names, so there is no reason to do this */
-        if (strcmp(dev + w - 4, "disc") == 0) {
-                w -= 4;
-                p = "part";
-        }
-
-        wp = strlen(p);
-
-        if (lth) {
-                snprintf(bufp, bufsiz, "%*.*s%s%-2u",
-                        lth-wp-2, w, dev, p, pno);
-        } else {
-                snprintf(bufp, bufsiz, "%.*s%s%-2u", w, dev, p, pno);
-        }
-        return bufp;
-}
 
 #include "fdisk_osf.c"
 
