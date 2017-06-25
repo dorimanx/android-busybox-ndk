@@ -19,7 +19,6 @@
 //config:	bool "Blacklist support"
 //config:	default y
 //config:	depends on MODPROBE && !MODPROBE_SMALL
-//config:	select PLATFORM_LINUX
 //config:	help
 //config:	  Say 'y' here to enable support for the 'blacklist' command in
 //config:	  modprobe.conf. This prevents the alias resolver to resolve
@@ -113,7 +112,7 @@
 //usage:
 //usage:#define modprobe_trivial_usage
 //usage:	"[-alrqvsD" IF_FEATURE_MODPROBE_BLACKLIST("b") "]"
-//usage:	" MODULE [SYMBOL=VALUE]..."
+//usage:	" MODULE" IF_FEATURE_CMDLINE_MODULE_OPTIONS(" [SYMBOL=VALUE]...")
 //usage:#define modprobe_full_usage "\n\n"
 //usage:       "	-a	Load multiple MODULEs"
 //usage:     "\n	-l	List (MODULE is a pattern)"
@@ -172,10 +171,13 @@ static const char modprobe_longopts[] ALIGN1 =
 /* "was seen in modules.dep": */
 #define MODULE_FLAG_FOUND_IN_MODDEP     0x0004
 #define MODULE_FLAG_BLACKLISTED         0x0008
+#define MODULE_FLAG_BUILTIN             0x0010
 
 struct globals {
 	llist_t *probes; /* MEs of module(s) requested on cmdline */
+#if ENABLE_FEATURE_CMDLINE_MODULE_OPTIONS
 	char *cmdline_mopts; /* module options from cmdline */
+#endif
 	int num_unresolved_deps;
 	/* bool. "Did we have 'symbol:FOO' requested on cmdline?" */
 	smallint need_symbols;
@@ -216,7 +218,7 @@ static void add_probe(const char *name)
 
 	m = get_or_add_modentry(name);
 	if (!(option_mask32 & (OPT_REMOVE | OPT_SHOW_DEPS))
-	 && (m->flags & MODULE_FLAG_LOADED)
+	 && (m->flags & (MODULE_FLAG_LOADED | MODULE_FLAG_BUILTIN))
 	) {
 		DBG("skipping %s, it is already loaded", name);
 		return;
@@ -249,6 +251,15 @@ static int FAST_FUNC config_file_action(const char *filename,
 	base = bb_basename(filename);
 	if (base[0] == '.')
 		goto error;
+
+	/* "man modprobe.d" from kmod version 22 suggests
+	 * that we shouldn't recurse into /etc/modprobe.d/dir/
+	 * _subdirectories_:
+	 */
+	if (depth > 1)
+		return SKIP; /* stop recursing */
+//TODO: instead, can use dirAction in recursive_action() to SKIP dirs
+//on depth == 1 level. But that's more code...
 
 	/* In dir recursion, skip files that do not end with a ".conf"
 	 * depth==0: read_config("modules.{symbols,alias}") must work,
@@ -412,8 +423,10 @@ static int do_modprobe(struct module_entry *m)
 
 	if (!(m->flags & MODULE_FLAG_FOUND_IN_MODDEP)) {
 		if (!(option_mask32 & INSMOD_OPT_SILENT))
-			bb_error_msg("module %s not found in modules.dep",
-				humanly_readable_name(m));
+			bb_error_msg((m->flags & MODULE_FLAG_BUILTIN) ?
+				     "module %s is builtin" :
+				     "module %s not found in modules.dep",
+				     humanly_readable_name(m));
 		return -ENOENT;
 	}
 	DBG("do_modprob'ing %s", m->modname);
@@ -459,8 +472,10 @@ static int do_modprobe(struct module_entry *m)
 		options = m2->options;
 		m2->options = NULL;
 		options = parse_and_add_kcmdline_module_options(options, m2->modname);
+#if ENABLE_FEATURE_CMDLINE_MODULE_OPTIONS
 		if (m == m2)
 			options = gather_options_str(options, G.cmdline_mopts);
+#endif
 
 		if (option_mask32 & OPT_SHOW_DEPS) {
 			printf(options ? "insmod %s/%s/%s %s\n"
@@ -615,6 +630,11 @@ int modprobe_main(int argc UNUSED_PARAM, char **argv)
 		while (config_read(parser, &s, 1, 1, "# \t", PARSE_NORMAL & ~PARSE_GREEDY))
 			get_or_add_modentry(s)->flags |= MODULE_FLAG_LOADED;
 		config_close(parser);
+
+		parser = config_open2("modules.builtin", fopen_for_read);
+		while (config_read(parser, &s, 1, 1, "# \t", PARSE_NORMAL))
+			get_or_add_modentry(s)->flags |= MODULE_FLAG_BUILTIN;
+		config_close(parser);
 	}
 
 	if (opt & (OPT_INSERT_ALL | OPT_REMOVE)) {
@@ -627,7 +647,9 @@ int modprobe_main(int argc UNUSED_PARAM, char **argv)
 		/* First argument is module name, rest are parameters */
 		DBG("probing just module %s", *argv);
 		add_probe(argv[0]);
+#if ENABLE_FEATURE_CMDLINE_MODULE_OPTIONS
 		G.cmdline_mopts = parse_cmdline_module_options(argv, /*quote_spaces:*/ 1);
+#endif
 	}
 
 	/* Happens if all requested modules are already loaded */
