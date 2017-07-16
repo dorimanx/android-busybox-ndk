@@ -285,7 +285,7 @@
  * therefore we don't show them either.
  */
 //usage:#define hush_trivial_usage
-//usage:	"[-nxl] [-c 'SCRIPT' [ARG0 [ARGS]] / FILE [ARGS]]"
+//usage:	"[-enxl] [-c 'SCRIPT' [ARG0 [ARGS]] / FILE [ARGS]]"
 //usage:#define hush_full_usage "\n\n"
 //usage:	"Unix shell interpreter"
 
@@ -746,6 +746,7 @@ struct function {
 static const char o_opt_strings[] ALIGN1 =
 	"pipefail\0"
 	"noexec\0"
+	"errexit\0"
 #if ENABLE_HUSH_MODE_X
 	"xtrace\0"
 #endif
@@ -753,6 +754,7 @@ static const char o_opt_strings[] ALIGN1 =
 enum {
 	OPT_O_PIPEFAIL,
 	OPT_O_NOEXEC,
+	OPT_O_ERREXIT,
 #if ENABLE_HUSH_MODE_X
 	OPT_O_XTRACE,
 #endif
@@ -809,6 +811,25 @@ struct globals {
 #else
 # define G_saved_tty_pgrp 0
 #endif
+	/* How deeply are we in context where "set -e" is ignored */
+	int errexit_depth;
+	/* "set -e" rules (do we follow them correctly?):
+	 * Exit if pipe, list, or compound command exits with a non-zero status.
+	 * Shell does not exit if failed command is part of condition in
+	 * if/while, part of && or || list except the last command, any command
+	 * in a pipe but the last, or if the command's return value is being
+	 * inverted with !. If a compound command other than a subshell returns a
+	 * non-zero status because a command failed while -e was being ignored, the
+	 * shell does not exit. A trap on ERR, if set, is executed before the shell
+	 * exits [ERR is a bashism].
+	 *
+	 * If a compound command or function executes in a context where -e is
+	 * ignored, none of the commands executed within are affected by the -e
+	 * setting. If a compound command or function sets -e while executing in a
+	 * context where -e is ignored, that setting does not have any effect until
+	 * the compound command or the command containing the function call completes.
+	 */
+
 	char o_opt[NUM_OPT_O];
 #if ENABLE_HUSH_MODE_X
 # define G_x_mode (G.o_opt[OPT_O_XTRACE])
@@ -3352,12 +3373,47 @@ static void done_pipe(struct parse_context *ctx, pipe_style type)
 	debug_printf_parse("done_pipe entered, followup %d\n", type);
 	/* Close previous command */
 	not_null = done_command(ctx);
-	ctx->pipe->followup = type;
 #if HAS_KEYWORDS
 	ctx->pipe->pi_inverted = ctx->ctx_inverted;
 	ctx->ctx_inverted = 0;
 	ctx->pipe->res_word = ctx->ctx_res_w;
 #endif
+	if (type != PIPE_BG || ctx->list_head == ctx->pipe) {
+ no_conv:
+		ctx->pipe->followup = type;
+	} else {
+		/* Necessary since && and || have more precedence than &:
+		 * "cmd1 && cmd2 &" must spawn both cmds, not only cmd2,
+		 * in a backgrounded subshell.
+		 */
+		struct pipe *pi;
+		struct command *command;
+
+		/* Is this actually the case? */
+		pi = ctx->list_head;
+		while (pi != ctx->pipe) {
+			if (pi->followup != PIPE_AND && pi->followup != PIPE_OR)
+				goto no_conv;
+			pi = pi->next;
+		}
+
+		debug_printf_parse("BG with more than one pipe, converting to { p1 &&...pN; } &\n");
+		pi->followup = PIPE_SEQ; /* close pN _not_ with "&"! */
+		pi = xzalloc(sizeof(*pi));
+		pi->followup = PIPE_BG;
+		pi->num_cmds = 1;
+		pi->cmds = xzalloc(sizeof(pi->cmds[0]));
+		command = &pi->cmds[0];
+		if (CMD_NORMAL != 0) /* "if xzalloc didn't do that already" */
+			command->cmd_type = CMD_NORMAL;
+		command->group = ctx->list_head;
+#if !BB_MMU
+//TODO: is this correct?!
+		command->group_as_string = xstrdup(ctx->as_string.data);
+#endif
+		/* Replace all pipes in ctx with one newly created */
+		ctx->list_head = ctx->pipe = pi;
+	}
 
 	/* Without this check, even just <enter> on command line generates
 	 * tree of three NOPs (!). Which is harmless but annoying.
@@ -3527,9 +3583,8 @@ static int reserved_word(o_string *word, struct parse_context *ctx)
 	if (r->flag & FLAG_START) {
 		struct parse_context *old;
 
-		old = xmalloc(sizeof(*old));
+		old = xmemdup(ctx, sizeof(*ctx));
 		debug_printf_parse("push stack %p\n", old);
-		*old = *ctx;   /* physical copy */
 		initialize_context(ctx);
 		ctx->stack = old;
 	} else if (/*ctx->ctx_res_w == RES_NONE ||*/ !(ctx->old_flag & (1 << r->res))) {
@@ -5159,7 +5214,7 @@ static struct pipe *parse_stream(char **pstring,
 			 * and it will match } earlier (not here). */
 			syntax_error_unexpected_ch(ch);
 			G.last_exitcode = 2;
-			goto parse_error1;
+			goto parse_error2;
 		default:
 			if (HUSH_DEBUG)
 				bb_error_msg_and_die("BUG: unexpected %c\n", ch);
@@ -5168,7 +5223,7 @@ static struct pipe *parse_stream(char **pstring,
 
  parse_error:
 	G.last_exitcode = 1;
- parse_error1:
+ parse_error2:
 	{
 		struct parse_context *pctx;
 		IF_HAS_KEYWORDS(struct parse_context *p2;)
@@ -7217,24 +7272,54 @@ static const char *get_cmdtext(struct pipe *pi)
 	return pi->cmdtext;
 }
 
-static void insert_bg_job(struct pipe *pi)
+static void remove_job_from_table(struct pipe *pi)
+{
+	struct pipe *prev_pipe;
+
+	if (pi == G.job_list) {
+		G.job_list = pi->next;
+	} else {
+		prev_pipe = G.job_list;
+		while (prev_pipe->next != pi)
+			prev_pipe = prev_pipe->next;
+		prev_pipe->next = pi->next;
+	}
+	G.last_jobid = 0;
+	if (G.job_list)
+		G.last_jobid = G.job_list->jobid;
+}
+
+static void delete_finished_job(struct pipe *pi)
+{
+	remove_job_from_table(pi);
+	free_pipe(pi);
+}
+
+static void clean_up_last_dead_job(void)
+{
+	if (G.job_list && !G.job_list->alive_cmds)
+		delete_finished_job(G.job_list);
+}
+
+static void insert_job_into_table(struct pipe *pi)
 {
 	struct pipe *job, **jobp;
 	int i;
 
-	/* Linear search for the ID of the job to use */
-	pi->jobid = 1;
-	for (job = G.job_list; job; job = job->next)
-		if (job->jobid >= pi->jobid)
-			pi->jobid = job->jobid + 1;
+	clean_up_last_dead_job();
 
-	/* Add job to the list of running jobs */
+	/* Find the end of the list, and find next job ID to use */
+	i = 0;
 	jobp = &G.job_list;
-	while ((job = *jobp) != NULL)
+	while ((job = *jobp) != NULL) {
+		if (job->jobid > i)
+			i = job->jobid;
 		jobp = &job->next;
-	job = *jobp = xmalloc(sizeof(*job));
+	}
+	pi->jobid = i + 1;
 
-	*job = *pi; /* physical copy */
+	/* Create a new job struct at the end */
+	job = *jobp = xmemdup(pi, sizeof(*pi));
 	job->next = NULL;
 	job->cmds = xzalloc(sizeof(pi->cmds[0]) * pi->num_cmds);
 	/* Cannot copy entire pi->cmds[] vector! This causes double frees */
@@ -7247,31 +7332,6 @@ static void insert_bg_job(struct pipe *pi)
 	if (G_interactive_fd)
 		printf("[%u] %u %s\n", job->jobid, (unsigned)job->cmds[0].pid, job->cmdtext);
 	G.last_jobid = job->jobid;
-}
-
-static void remove_bg_job(struct pipe *pi)
-{
-	struct pipe *prev_pipe;
-
-	if (pi == G.job_list) {
-		G.job_list = pi->next;
-	} else {
-		prev_pipe = G.job_list;
-		while (prev_pipe->next != pi)
-			prev_pipe = prev_pipe->next;
-		prev_pipe->next = pi->next;
-	}
-	if (G.job_list)
-		G.last_jobid = G.job_list->jobid;
-	else
-		G.last_jobid = 0;
-}
-
-/* Remove a backgrounded job */
-static void delete_finished_bg_job(struct pipe *pi)
-{
-	remove_bg_job(pi);
-	free_pipe(pi);
 }
 #endif /* JOB */
 
@@ -7359,7 +7419,7 @@ static int process_wait_result(struct pipe *fg_pipe, pid_t childpid, int status)
 				if (G_interactive_fd) {
 #if ENABLE_HUSH_JOB
 					if (fg_pipe->alive_cmds != 0)
-						insert_bg_job(fg_pipe);
+						insert_job_into_table(fg_pipe);
 #endif
 					return rcode;
 				}
@@ -7397,14 +7457,22 @@ static int process_wait_result(struct pipe *fg_pipe, pid_t childpid, int status)
 		pi->cmds[i].pid = 0;
 		pi->alive_cmds--;
 		if (!pi->alive_cmds) {
-			if (G_interactive_fd)
+			if (G_interactive_fd) {
 				printf(JOB_STATUS_FORMAT, pi->jobid,
 						"Done", pi->cmdtext);
-			delete_finished_bg_job(pi);
-//bash deletes finished jobs from job table only in interactive mode, after "jobs" cmd,
-//or if pid of a new process matches one of the old ones
-//(see cleanup_dead_jobs(), delete_old_job(), J_NOTIFIED in bash source).
-//Testcase script: "(exit 3) & sleep 1; wait %1; echo $?" prints 3 in bash.
+				delete_finished_job(pi);
+			} else {
+/*
+ * bash deletes finished jobs from job table only in interactive mode,
+ * after "jobs" cmd, or if pid of a new process matches one of the old ones
+ * (see cleanup_dead_jobs(), delete_old_job(), J_NOTIFIED in bash source).
+ * Testcase script: "(exit 3) & sleep 1; wait %1; echo $?" prints 3 in bash.
+ * We only retain one "dead" job, if it's the single job on the list.
+ * This covers most of real-world scenarios where this is useful.
+ */
+				if (pi != G.job_list)
+					delete_finished_job(pi);
+			}
 		}
 	} else {
 		/* child stopped */
@@ -8023,6 +8091,7 @@ static int run_list(struct pipe *pi)
 	/* Go through list of pipes, (maybe) executing them. */
 	for (; pi; pi = IF_HUSH_LOOPS(rword == RES_DONE ? loop_top : ) pi->next) {
 		int r;
+		int sv_errexit_depth;
 
 		if (G.flag_SIGINT)
 			break;
@@ -8032,6 +8101,13 @@ static int run_list(struct pipe *pi)
 		IF_HAS_KEYWORDS(rword = pi->res_word;)
 		debug_printf_exec(": rword=%d cond_code=%d last_rword=%d\n",
 				rword, cond_code, last_rword);
+
+		sv_errexit_depth = G.errexit_depth;
+		if (IF_HAS_KEYWORDS(rword == RES_IF || rword == RES_ELIF ||)
+		    pi->followup != PIPE_SEQ
+		) {
+			G.errexit_depth++;
+		}
 #if ENABLE_HUSH_LOOPS
 		if ((rword == RES_WHILE || rword == RES_UNTIL || rword == RES_FOR)
 		 && loop_top == NULL /* avoid bumping G.depth_of_loop twice */
@@ -8219,7 +8295,7 @@ static int run_list(struct pipe *pi)
 			 * I'm NOT treating inner &'s as jobs */
 #if ENABLE_HUSH_JOB
 			if (G.run_list_level == 1)
-				insert_bg_job(pi);
+				insert_job_into_table(pi);
 #endif
 			/* Last command's pid goes to $! */
 			G.last_bg_pid = pi->cmds[pi->num_cmds - 1].pid;
@@ -8244,6 +8320,14 @@ static int run_list(struct pipe *pi)
 			G.last_exitcode = rcode;
 			check_and_run_traps();
 		}
+
+		/* Handle "set -e" */
+		if (rcode != 0 && G.o_opt[OPT_O_ERREXIT]) {
+			debug_printf_exec("ERREXIT:1 errexit_depth:%d\n", G.errexit_depth);
+			if (G.errexit_depth == 0)
+				hush_exit(rcode);
+		}
+		G.errexit_depth = sv_errexit_depth;
 
 		/* Analyze how result affects subsequent commands */
 #if ENABLE_HUSH_IF
@@ -8424,6 +8508,9 @@ static int set_mode(int state, char mode, const char *o_opt)
 			G.o_opt[idx] = state;
 			break;
 		}
+	case 'e':
+		G.o_opt[OPT_O_ERREXIT] = state;
+		break;
 	default:
 		return EXIT_FAILURE;
 	}
@@ -8550,7 +8637,7 @@ int hush_main(int argc, char **argv)
 	flags = (argv[0] && argv[0][0] == '-') ? OPT_login : 0;
 	builtin_argc = 0;
 	while (1) {
-		opt = getopt(argc, argv, "+c:xinsl"
+		opt = getopt(argc, argv, "+c:exinsl"
 #if !BB_MMU
 				"<:$:R:V:"
 # if ENABLE_HUSH_FUNCTIONS
@@ -8668,6 +8755,7 @@ int hush_main(int argc, char **argv)
 #endif
 		case 'n':
 		case 'x':
+		case 'e':
 			if (set_mode(1, opt, NULL) == 0) /* no error */
 				break;
 		default:
@@ -9658,6 +9746,9 @@ static int FAST_FUNC builtin_jobs(char **argv UNUSED_PARAM)
 
 		printf(JOB_STATUS_FORMAT, job->jobid, status_string, job->cmdtext);
 	}
+
+	clean_up_last_dead_job();
+
 	return EXIT_SUCCESS;
 }
 
@@ -9702,14 +9793,14 @@ static int FAST_FUNC builtin_fg_bg(char **argv)
 	i = kill(- pi->pgrp, SIGCONT);
 	if (i < 0) {
 		if (errno == ESRCH) {
-			delete_finished_bg_job(pi);
+			delete_finished_job(pi);
 			return EXIT_SUCCESS;
 		}
 		bb_perror_msg("kill (SIGCONT)");
 	}
 
 	if (argv[0][0] == 'f') {
-		remove_bg_job(pi);
+		remove_job_from_table(pi); /* FG job shouldn't be in job table */
 		return checkjobs_and_fg_shell(pi);
 	}
 	return EXIT_SUCCESS;
@@ -9901,17 +9992,12 @@ static int FAST_FUNC builtin_wait(char **argv)
 				wait_pipe = parse_jobspec(*argv);
 				if (wait_pipe) {
 					ret = job_exited_or_stopped(wait_pipe);
-					if (ret < 0)
+					if (ret < 0) {
 						ret = wait_for_child_or_signal(wait_pipe, 0);
-//bash immediately deletes finished jobs from job table only in interactive mode,
-//we _always_ delete them at once. If we'd start doing that, this (and more)
-//would be necessary to avoid accumulating dead jobs:
-# if 0
-					else {
-						if (!wait_pipe->alive_cmds)
-							delete_finished_bg_job(wait_pipe);
+					} else {
+						/* waiting on "last dead job" removes it */
+						clean_up_last_dead_job();
 					}
-# endif
 				}
 				/* else: parse_jobspec() already emitted error msg */
 				continue;
@@ -9929,7 +10015,7 @@ static int FAST_FUNC builtin_wait(char **argv)
 			/* No */
 			ret = 127;
 			if (errno == ECHILD) {
-				if (G.last_bg_pid > 0 && pid == G.last_bg_pid) {
+				if (pid == G.last_bg_pid) {
 					/* "wait $!" but last bg task has already exited. Try:
 					 * (sleep 1; exit 3) & sleep 2; echo $?; wait $!; echo $?
 					 * In bash it prints exitcode 0, then 3.
