@@ -9,27 +9,27 @@
  * Licensed under GPLv2, see file LICENSE in this source tree.
  */
 //config:config PS
-//config:	bool "ps"
+//config:	bool "ps (11 kb)"
 //config:	default y
 //config:	help
-//config:	  ps gives a snapshot of the current processes.
+//config:	ps gives a snapshot of the current processes.
 //config:
 //config:config FEATURE_PS_WIDE
 //config:	bool "Enable wide output option (-w)"
 //config:	default y
 //config:	depends on PS && !DESKTOP
 //config:	help
-//config:	  Support argument 'w' for wide output.
-//config:	  If given once, 132 chars are printed, and if given more
-//config:	  than once, the length is unlimited.
+//config:	Support argument 'w' for wide output.
+//config:	If given once, 132 chars are printed, and if given more
+//config:	than once, the length is unlimited.
 //config:
 //config:config FEATURE_PS_LONG
 //config:	bool "Enable long output option (-l)"
 //config:	default y
 //config:	depends on PS && !DESKTOP
 //config:	help
-//config:	  Support argument 'l' for long output.
-//config:	  Adds fields PPID, RSS, START, TIME & TTY
+//config:	Support argument 'l' for long output.
+//config:	Adds fields PPID, RSS, START, TIME & TTY
 //config:
 //config:config FEATURE_PS_TIME
 //config:	bool "Support -o time and -o etime output specifiers"
@@ -42,8 +42,8 @@
 //config:	default n
 //config:	depends on FEATURE_PS_TIME
 //config:	help
-//config:	  Include support for measuring HZ on old kernels and non-ELF systems
-//config:	  (if you are on Linux 2.4.0+ and use ELF, you don't need this)
+//config:	Include support for measuring HZ on old kernels and non-ELF systems
+//config:	(if you are on Linux 2.4.0+ and use ELF, you don't need this)
 //config:
 //config:config FEATURE_PS_ADDITIONAL_COLUMNS
 //config:	bool "Support -o rgroup, -o ruser, -o nice specifiers"
@@ -340,6 +340,11 @@ static void func_pgid(char *buf, int size, const procps_status_t *ps)
 	sprintf(buf, "%*u", size, ps->pgid);
 }
 
+static void func_sid(char *buf, int size, const procps_status_t *ps)
+{
+	sprintf(buf, "%*u", size, ps->sid);
+}
+
 static void put_lu(char *buf, int size, unsigned long u)
 {
 	char buf4[5];
@@ -424,11 +429,6 @@ static void func_label(char *buf, int size, const procps_status_t *ps)
 #endif
 
 /*
-static void func_nice(char *buf, int size, const procps_status_t *ps)
-{
-	ps->???
-}
-
 static void func_pcpu(char *buf, int size, const procps_status_t *ps)
 {
 }
@@ -458,6 +458,7 @@ static const ps_out_t out_spec[] = {
 	{ 6                  , "tty"   ,"TT"     ,func_tty   ,PSSCAN_TTY     },
 	{ 4                  , "vsz"   ,"VSZ"    ,func_vsz   ,PSSCAN_VSZ     },
 /* Not mandated, but useful: */
+	{ 5                  , "sid"   ,"SID"    ,func_sid   ,PSSCAN_SID     },
 	{ 4                  , "stat"  ,"STAT"   ,func_state ,PSSCAN_STATE   },
 	{ 4                  , "rss"   ,"RSS"    ,func_rss   ,PSSCAN_RSS     },
 #if ENABLE_SELINUX

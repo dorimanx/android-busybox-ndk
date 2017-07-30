@@ -6,10 +6,10 @@
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 //config:config BLKDISCARD
-//config:	bool "blkdiscard"
+//config:	bool "blkdiscard (5.3 kb)"
 //config:	default y
 //config:	help
-//config:	  blkdiscard discards sectors on a given device.
+//config:	blkdiscard discards sectors on a given device.
 
 //kbuild:lib-$(CONFIG_BLKDISCARD) += blkdiscard.o
 //applet:IF_BLKDISCARD(APPLET(blkdiscard, BB_DIR_USR_BIN, BB_SUID_DROP))
@@ -27,6 +27,13 @@
 
 #include "libbb.h"
 #include <linux/fs.h>
+
+#ifndef BLKDISCARD
+#define BLKDISCARD 0x1277
+#endif
+#ifndef BLKSECDISCARD
+#define BLKSECDISCARD 0x127d
+#endif
 
 int blkdiscard_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int blkdiscard_main(int argc UNUSED_PARAM, char **argv)

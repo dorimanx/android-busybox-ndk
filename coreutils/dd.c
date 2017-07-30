@@ -7,49 +7,49 @@
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 //config:config DD
-//config:	bool "dd"
+//config:	bool "dd (7.1 kb)"
 //config:	default y
 //config:	help
-//config:	  dd copies a file (from standard input to standard output,
-//config:	  by default) using specific input and output blocksizes,
-//config:	  while optionally performing conversions on it.
+//config:	dd copies a file (from standard input to standard output,
+//config:	by default) using specific input and output blocksizes,
+//config:	while optionally performing conversions on it.
 //config:
 //config:config FEATURE_DD_SIGNAL_HANDLING
 //config:	bool "Enable signal handling for status reporting"
 //config:	default y
 //config:	depends on DD
 //config:	help
-//config:	  Sending a SIGUSR1 signal to a running `dd' process makes it
-//config:	  print to standard error the number of records read and written
-//config:	  so far, then to resume copying.
+//config:	Sending a SIGUSR1 signal to a running `dd' process makes it
+//config:	print to standard error the number of records read and written
+//config:	so far, then to resume copying.
 //config:
-//config:	  $ dd if=/dev/zero of=/dev/null &
-//config:	  $ pid=$!; kill -USR1 $pid; sleep 1; kill $pid
-//config:	  10899206+0 records in
-//config:	  10899206+0 records out
+//config:	$ dd if=/dev/zero of=/dev/null &
+//config:	$ pid=$!; kill -USR1 $pid; sleep 1; kill $pid
+//config:	10899206+0 records in
+//config:	10899206+0 records out
 //config:
 //config:config FEATURE_DD_THIRD_STATUS_LINE
 //config:	bool "Enable the third status line upon signal"
 //config:	default y
 //config:	depends on DD && FEATURE_DD_SIGNAL_HANDLING
 //config:	help
-//config:	  Displays a coreutils-like third status line with transferred bytes,
-//config:	  elapsed time and speed.
+//config:	Displays a coreutils-like third status line with transferred bytes,
+//config:	elapsed time and speed.
 //config:
 //config:config FEATURE_DD_IBS_OBS
 //config:	bool "Enable ibs, obs and conv options"
 //config:	default y
 //config:	depends on DD
 //config:	help
-//config:	  Enable support for writing a certain number of bytes in and out,
-//config:	  at a time, and performing conversions on the data stream.
+//config:	Enable support for writing a certain number of bytes in and out,
+//config:	at a time, and performing conversions on the data stream.
 //config:
 //config:config FEATURE_DD_STATUS
 //config:	bool "Enable status display options"
 //config:	default y
 //config:	depends on DD
 //config:	help
-//config:	  Enable support for status=noxfer/none option.
+//config:	Enable support for status=noxfer/none option.
 
 //applet:IF_DD(APPLET_NOEXEC(dd, dd, BB_DIR_BIN, BB_SUID_DROP, dd))
 
@@ -133,9 +133,8 @@ enum {
 	/* end of input flags */
 	FLAG_TWOBUFS = (1 << 6) * ENABLE_FEATURE_DD_IBS_OBS,
 	FLAG_COUNT   = 1 << 7,
-	FLAG_STATUS  = 1 << 8,
-	FLAG_STATUS_NONE = 1 << 9,
-	FLAG_STATUS_NOXFER = 1 << 10,
+	FLAG_STATUS_NONE = 1 << 8,
+	FLAG_STATUS_NOXFER = 1 << 9,
 };
 
 static void dd_output_status(int UNUSED_PARAM cur_signal)
@@ -396,7 +395,7 @@ int dd_main(int argc UNUSED_PARAM, char **argv)
 			n = index_in_strings(status_words, val);
 			if (n < 0)
 				bb_error_msg_and_die(bb_msg_invalid_arg_to, val, "status");
-			G.flags |= FLAG_STATUS << n;
+			G.flags |= FLAG_STATUS_NONE << n;
 			/*continue;*/
 		}
 #endif

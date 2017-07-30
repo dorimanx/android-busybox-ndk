@@ -8,16 +8,16 @@
  * for details.
  */
 //config:config ADD_SHELL
-//config:       bool "add-shell"
-//config:       default y if DESKTOP
-//config:       help
-//config:         Add shells to /etc/shells.
+//config:	bool "add-shell (2.8 kb)"
+//config:	default y if DESKTOP
+//config:	help
+//config:	Add shells to /etc/shells.
 //config:
 //config:config REMOVE_SHELL
-//config:       bool "remove-shell"
-//config:       default y if DESKTOP
-//config:       help
-//config:         Remove shells from /etc/shells.
+//config:	bool "remove-shell (2.7 kb)"
+//config:	default y if DESKTOP
+//config:	help
+//config:	Remove shells from /etc/shells.
 
 //                       APPLET_ODDNAME:name          main              location         suid_type     help
 //applet:IF_ADD_SHELL(   APPLET_ODDNAME(add-shell   , add_remove_shell, BB_DIR_USR_SBIN, BB_SUID_DROP, add_shell   ))
@@ -84,7 +84,7 @@ int add_remove_shell_main(int argc UNUSED_PARAM, char **argv)
 		while ((line = xmalloc_fgetline(orig_fp)) != NULL) {
 			char **cpp = argv;
 			while (*cpp) {
-				if (strcmp(*cpp, line) == 0) {
+				if (*cpp != dont_add && strcmp(*cpp, line) == 0) {
 					/* Old file has this shell name */
 					if (REMOVE_SHELL) {
 						/* we are remove-shell */

@@ -5,10 +5,10 @@
  * Licensed under GPLv2, see file LICENSE in this source tree.
  */
 //config:config NL
-//config:	bool "nl"
+//config:	bool "nl (4.3 kb)"
 //config:	default y
 //config:	help
-//config:	  nl is used to number lines of files.
+//config:	nl is used to number lines of files.
 
 //applet:IF_NL(APPLET(nl, BB_DIR_USR_BIN, BB_SUID_DROP))
 
@@ -34,26 +34,6 @@
 /* By default, selects -v1 -i1 -l1 -sTAB -w6 -nrn -hn -bt -fn */
 
 #include "libbb.h"
-
-void FAST_FUNC print_numbered_lines(struct number_state *ns, const char *filename)
-{
-	FILE *fp = fopen_or_warn_stdin(filename);
-	unsigned N = ns->start;
-	char *line;
-
-	while ((line = xmalloc_fgetline(fp)) != NULL) {
-		if (ns->all
-		 || (ns->nonempty && line[0])
-		) {
-			printf("%*u%s%s\n", ns->width, N, ns->sep, line);
-			N += ns->inc;
-		} else if (ns->empty_str)
-			fputs(ns->empty_str, stdout);
-		free(line);
-	}
-
-	fclose(fp);
-}
 
 int nl_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int nl_main(int argc UNUSED_PARAM, char **argv)
