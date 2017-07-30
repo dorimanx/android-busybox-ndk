@@ -39,11 +39,11 @@
 /* 19990508 Busy Boxed! Dave Cinege */
 
 //config:config PRINTF
-//config:	bool "printf"
+//config:	bool "printf (3.3 kb)"
 //config:	default y
 //config:	help
-//config:	  printf is used to format and print specified strings.
-//config:	  It's similar to `echo' except it has more options.
+//config:	printf is used to format and print specified strings.
+//config:	It's similar to `echo' except it has more options.
 
 //applet:IF_PRINTF(APPLET_NOFORK(printf, printf, BB_DIR_USR_BIN, BB_SUID_DROP, printf))
 
@@ -305,7 +305,7 @@ static char **print_formatted(char *f, char **argv, int *conv_err)
 				}
 				break;
 			}
-			if (strchr("-+ #", *f)) {
+			if (*f && strchr("-+ #", *f)) {
 				++f;
 				++direc_length;
 			}
@@ -348,7 +348,7 @@ static char **print_formatted(char *f, char **argv, int *conv_err)
 				static const char format_chars[] ALIGN1 = "diouxXfeEgGcs";
 				char *p = strchr(format_chars, *f);
 				/* needed - try "printf %" without it */
-				if (p == NULL) {
+				if (p == NULL || *f == '\0') {
 					bb_error_msg("%s: invalid format", direc_start);
 					/* causes main() to exit with error */
 					return saved_argv - 1;
